@@ -405,4 +405,4 @@ terraform destroy
 
 **Rajdip Chakraborty**
 - **GitHub**: [@rajdip-chakraborty-dev](https://github.com/rajdip-chakraborty-dev)
-- **LinkedIn**: [Rajdip Chakraborty](https://www.linkedin.com/in/rajdip-chakraborty)
+- **LinkedIn**: [Rajdip Chakraborty](https://www.linkedin.com/in/rajdip-chakraborty-2899bb215)
