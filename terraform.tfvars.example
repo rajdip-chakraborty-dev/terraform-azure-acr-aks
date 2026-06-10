@@ -1,0 +1,45 @@
+# Copy this file to terraform.tfvars and update all values before deploying.
+# Never commit terraform.tfvars to source control — it may contain environment-specific data.
+
+resource_group_name = "rg-acr-aks-prod"
+location            = "eastus"
+
+# ── Networking ────────────────────────────────────────────────────────────────
+vnet_name          = "vnet-acr-aks-prod"
+vnet_address_space = ["10.0.0.0/8"]
+
+# AKS subnet: large range required because Azure CNI assigns one IP per pod
+aks_subnet_name   = "subnet-aks"
+aks_subnet_prefix = "10.240.0.0/16"
+
+# ACR private endpoint subnet
+acr_subnet_name   = "subnet-acr-pe"
+acr_subnet_prefix = "10.241.0.0/24"
+
+# Self-hosted ADO build agents subnet
+agents_subnet_name   = "subnet-ado-agents"
+agents_subnet_prefix = "10.242.0.0/24"
+
+# ── Container Registry ────────────────────────────────────────────────────────
+# Name must be globally unique — 5 to 50 alphanumeric characters, no hyphens
+acr_name = "acrmycompanyprod001"
+acr_sku  = "Premium"   # Premium is required for private endpoints — do not change
+
+# ── AKS Cluster ───────────────────────────────────────────────────────────────
+aks_cluster_name   = "aks-prod"
+aks_dns_prefix     = "aksprod"
+kubernetes_version = null   # null = latest supported version; set to e.g. "1.29" to pin
+node_count         = 3
+node_vm_size       = "Standard_DS2_v2"
+
+# Kubernetes service network — must not overlap the VNet or pod address space
+service_cidr   = "192.168.0.0/16"
+dns_service_ip = "192.168.0.10"
+
+# ── Tags ─────────────────────────────────────────────────────────────────────
+tags = {
+  Environment = "Production"
+  Project     = "Private-ACR-AKS"
+  ManagedBy   = "Terraform"
+  CostCenter  = "platform-team"
+}

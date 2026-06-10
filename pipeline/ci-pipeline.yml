@@ -1,0 +1,98 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI Pipeline — Build Docker image and push to private Azure Container Registry
+#
+# Prerequisites (see README for full setup instructions):
+#   1. An ADO Variable Group named 'acr-aks-variables' linked to this pipeline
+#   2. A Docker Registry Service Connection in ADO pointing to the private ACR
+#   3. Self-hosted ADO agents in 'subnet-ado-agents' with network line-of-sight
+#      to the private ACR endpoint
+#
+# No secrets are hardcoded — all credentials flow through ADO service connections
+# and the variable group.
+# ─────────────────────────────────────────────────────────────────────────────
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - src/**
+      - Dockerfile
+      - .dockerignore
+
+variables:
+  - group: acr-aks-variables          # ADO Variable Group (see README for required keys)
+  - name: imageRepository
+    value: 'myapp'                     # Repository name inside ACR — update to match your app
+  - name: dockerfilePath
+    value: '$(Build.SourcesDirectory)/Dockerfile'
+  - name: buildTag
+    value: '$(Build.BuildId)'          # Unique, incrementing tag per build
+
+pool:
+  name: $(adoAgentPoolName)            # Self-hosted agent pool name (from variable group)
+
+stages:
+  - stage: Build
+    displayName: 'Build & Push Docker Image'
+    jobs:
+      - job: BuildAndPush
+        displayName: 'Build and push image to private ACR'
+        steps:
+          - checkout: self
+            displayName: 'Checkout source code'
+
+          # ── Build ─────────────────────────────────────────────────────────
+          - task: Docker@2
+            displayName: 'Build Docker image'
+            inputs:
+              command: 'build'
+              repository: '$(imageRepository)'
+              dockerfile: '$(dockerfilePath)'
+              arguments: '--no-cache --pull'
+              tags: |
+                $(buildTag)
+                latest
+
+          # ── (Optional) Image Scan ─────────────────────────────────────────
+          # Uncomment to add a vulnerability scan before pushing.
+          # Replace with your preferred scanner (Trivy, Aqua, Snyk, etc.)
+          # - bash: |
+          #     docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          #       aquasec/trivy image --exit-code 1 --severity HIGH,CRITICAL \
+          #       $(imageRepository):$(buildTag)
+          #   displayName: 'Scan image for vulnerabilities'
+
+          # ── Push ──────────────────────────────────────────────────────────
+          # acrServiceConnection is a Docker Registry Service Connection configured
+          # in Project Settings → Service Connections, pointing to the private ACR.
+          - task: Docker@2
+            displayName: 'Push image to private ACR'
+            inputs:
+              command: 'push'
+              containerRegistry: '$(acrServiceConnection)'
+              repository: '$(imageRepository)'
+              tags: |
+                $(buildTag)
+                latest
+
+          # ── Publish Metadata ──────────────────────────────────────────────
+          # Write the exact image reference so the CD pipeline can consume it.
+          - bash: |
+              cat <<EOF > $(Build.ArtifactStagingDirectory)/image-metadata.txt
+              IMAGE=$(acrLoginServer)/$(imageRepository):$(buildTag)
+              BUILD_ID=$(buildTag)
+              ACR_LOGIN_SERVER=$(acrLoginServer)
+              IMAGE_REPOSITORY=$(imageRepository)
+              EOF
+              echo "Published image: $(acrLoginServer)/$(imageRepository):$(buildTag)"
+            displayName: 'Write image metadata'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish image metadata artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'image-metadata'
+              publishLocation: 'pipeline'

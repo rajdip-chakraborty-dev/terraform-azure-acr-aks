@@ -1,0 +1,145 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CD Pipeline — Deploy Docker image from private ACR to private AKS
+#
+# Flow:
+#   CI pipeline (main branch) → triggers this pipeline → deploys to Dev →
+#   manual approval gate → deploys to Production
+#
+# Prerequisites (see README for full setup instructions):
+#   1. An ADO Variable Group named 'acr-aks-variables'
+#   2. An Azure Resource Manager Service Connection with permissions to
+#      read AKS credentials (Azure Kubernetes Service Cluster User Role)
+#   3. ADO Environments named 'aks-dev' and 'aks-prod' (configure approval
+#      gates on 'aks-prod' via Environment → Approvals and checks)
+#   4. Self-hosted ADO agents in 'subnet-ado-agents' — they must have network
+#      line-of-sight to the private AKS API server to run kubectl commands
+#   5. Kubernetes manifests in the k8s/ directory of the repository
+#
+# No secrets are hardcoded — credentials flow through ADO service connections.
+# ─────────────────────────────────────────────────────────────────────────────
+
+trigger: none   # Triggered by CI pipeline completion (see resources below)
+
+resources:
+  pipelines:
+    - pipeline: ci-build                       # Logical alias used in this file
+      source: 'CI - Build and Push Image'      # Must match the display name of the CI pipeline in ADO
+      trigger:
+        branches:
+          include:
+            - main                             # Only auto-deploy when CI runs on main
+
+variables:
+  - group: acr-aks-variables
+  - name: imageRepository
+    value: 'myapp'                             # Must match the value in ci-pipeline.yml
+  - name: k8sNamespace
+    value: 'default'                           # Kubernetes namespace to deploy into
+
+pool:
+  name: $(adoAgentPoolName)
+
+stages:
+  # ─── Stage 1: Deploy to Development ────────────────────────────────────────
+  - stage: DeployDev
+    displayName: 'Deploy to Development'
+    jobs:
+      - deployment: DeployToAKSDev
+        displayName: 'Deploy image to AKS (dev)'
+        environment: 'aks-dev'                 # ADO Environment — add checks/gates here as needed
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  displayName: 'Checkout repository (includes k8s/ manifests)'
+
+                # Replace the REPLACE_ACR_IMAGE placeholder in deployment.yaml
+                # with the exact image built by the triggering CI run.
+                - bash: |
+                    IMAGE_TAG="$(resources.pipeline.ci-build.runID)"
+                    FULL_IMAGE="$(acrLoginServer)/$(imageRepository):${IMAGE_TAG}"
+                    echo "Deploying image: ${FULL_IMAGE}"
+                    sed -i "s|REPLACE_ACR_IMAGE|${FULL_IMAGE}|g" \
+                      "$(Build.SourcesDirectory)/k8s/deployment.yaml"
+                  displayName: 'Substitute image tag in deployment manifest'
+
+                # Apply Kubernetes manifests — the KubernetesManifest task runs kubectl
+                # from the agent machine. Because the agent is in 'subnet-ado-agents'
+                # (same VNet as AKS), it can reach the private API server.
+                - task: KubernetesManifest@1
+                  displayName: 'Apply manifests to AKS (dev)'
+                  inputs:
+                    action: 'deploy'
+                    connectionType: 'azureResourceManager'
+                    azureSubscriptionConnection: '$(azureServiceConnection)'
+                    azureResourceGroup: '$(resourceGroupName)'
+                    kubernetesCluster: '$(aksClusterName)'
+                    useClusterAdmin: false
+                    namespace: '$(k8sNamespace)'
+                    manifests: |
+                      $(Build.SourcesDirectory)/k8s/deployment.yaml
+                      $(Build.SourcesDirectory)/k8s/service.yaml
+
+                # Verify the rollout completes successfully before marking stage as done
+                - bash: |
+                    az aks get-credentials \
+                      --resource-group "$(resourceGroupName)" \
+                      --name "$(aksClusterName)" \
+                      --overwrite-existing
+                    kubectl rollout status deployment/myapp \
+                      --namespace "$(k8sNamespace)" \
+                      --timeout=5m
+                  displayName: 'Verify rollout status'
+                  env:
+                    AZURE_DEVOPS_EXT_PAT: $(System.AccessToken)
+
+  # ─── Stage 2: Deploy to Production ─────────────────────────────────────────
+  - stage: DeployProd
+    displayName: 'Deploy to Production'
+    dependsOn: DeployDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployToAKSProd
+        displayName: 'Deploy image to AKS (prod)'
+        environment: 'aks-prod'                # Configure a manual approval gate on this environment
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  displayName: 'Checkout repository'
+
+                - bash: |
+                    IMAGE_TAG="$(resources.pipeline.ci-build.runID)"
+                    FULL_IMAGE="$(acrLoginServer)/$(imageRepository):${IMAGE_TAG}"
+                    echo "Deploying image: ${FULL_IMAGE}"
+                    sed -i "s|REPLACE_ACR_IMAGE|${FULL_IMAGE}|g" \
+                      "$(Build.SourcesDirectory)/k8s/deployment.yaml"
+                  displayName: 'Substitute image tag in deployment manifest'
+
+                - task: KubernetesManifest@1
+                  displayName: 'Apply manifests to AKS (prod)'
+                  inputs:
+                    action: 'deploy'
+                    connectionType: 'azureResourceManager'
+                    azureSubscriptionConnection: '$(azureServiceConnection)'
+                    azureResourceGroup: '$(resourceGroupName)'
+                    kubernetesCluster: '$(aksClusterName)'
+                    useClusterAdmin: false
+                    namespace: '$(k8sNamespace)'
+                    manifests: |
+                      $(Build.SourcesDirectory)/k8s/deployment.yaml
+                      $(Build.SourcesDirectory)/k8s/service.yaml
+
+                - bash: |
+                    az aks get-credentials \
+                      --resource-group "$(resourceGroupName)" \
+                      --name "$(aksClusterName)" \
+                      --overwrite-existing
+                    kubectl rollout status deployment/myapp \
+                      --namespace "$(k8sNamespace)" \
+                      --timeout=10m
+                  displayName: 'Verify rollout status'
+                  env:
+                    AZURE_DEVOPS_EXT_PAT: $(System.AccessToken)
