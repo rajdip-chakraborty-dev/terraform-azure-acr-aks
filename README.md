@@ -97,7 +97,7 @@ terraform-azure-acr-aks/
 │       ├── variables.tf
 │       └── outputs.tf
 │
-├── pipeline/
+├── pipelines/
 │   ├── ci-pipeline.yml            # ADO CI — build Docker image, push to private ACR
 │   └── cd-pipeline.yml            # ADO CD — deploy from ACR to private AKS
 │
@@ -279,13 +279,13 @@ Name the group exactly: **`acr-aks-variables`**
 1. Go to **Pipelines → New pipeline**
 2. Connect to your repository
 3. Select **Existing Azure Pipelines YAML file**
-4. Path: `pipeline/ci-pipeline.yml`
+4. Path: `pipelines/ci-pipeline.yml`
 5. Rename the pipeline to: **`CI - Build and Push Image`** (the CD pipeline references this exact name)
 6. Link the `acr-aks-variables` variable group under **Variables → Variable groups**
 
 ### CD Pipeline
 
-1. Repeat the steps above with path: `pipeline/cd-pipeline.yml`
+1. Repeat the steps above with path: `pipelines/cd-pipeline.yml`
 2. Create two ADO **Environments**:
    - `aks-dev` — no gates required (auto-deploys on CI success)
    - `aks-prod` — add a **manual approval** gate (Environments → Approvals and checks)
