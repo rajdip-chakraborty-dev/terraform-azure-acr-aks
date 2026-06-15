@@ -15,45 +15,75 @@ Terraform modules for provisioning a **private Azure Container Registry (ACR)** 
 
 ## Architecture Overview
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  Azure Resource Group                                              │
-│                                                                    │
-│  ┌─── Virtual Network (10.0.0.0/8) ──────────────────────────┐   │
-│  │                                                             │   │
-│  │  ┌────────────────────┐   ┌─────────────────────────────┐  │   │
-│  │  │  subnet-aks        │   │  subnet-acr-pe              │  │   │
-│  │  │  10.240.0.0/16     │   │  10.241.0.0/24              │  │   │
-│  │  │                    │   │                             │  │   │
-│  │  │  ┌─────────────┐   │   │  ┌──────────────────────┐  │  │   │
-│  │  │  │  AKS Nodes  │   │   │  │  ACR Private         │  │  │   │
-│  │  │  │  (private   │   │   │  │  Endpoint            │  │  │   │
-│  │  │  │   cluster)  │   │   │  └──────────────────────┘  │  │   │
-│  │  │  └─────────────┘   │   └─────────────────────────────┘  │   │
-│  │  └────────────────────┘                                     │   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐   │   │
-│  │  │  subnet-ado-agents  10.242.0.0/24                   │   │   │
-│  │  │                                                     │   │   │
-│  │  │  ┌───────────────────────────────────────────────┐  │   │   │
-│  │  │  │  Self-hosted ADO Agents                       │  │   │   │
-│  │  │  │  • Line-of-sight to ACR private endpoint      │  │   │   │
-│  │  │  │  • Line-of-sight to AKS private API server    │  │   │   │
-│  │  │  └───────────────────────────────────────────────┘  │   │   │
-│  │  └─────────────────────────────────────────────────────┘   │   │
-│  │                                                             │   │
-│  │  Private DNS: privatelink.azurecr.io → ACR private IP      │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                    │
-│  Azure Container Registry (Premium, public access disabled)        │
-│  AKS Cluster (private API server, Azure CNI, AcrPull via MI)      │
-└────────────────────────────────────────────────────────────────────┘
+**Infrastructure Layout**
 
-CI/CD Flow:
-  Developer push → ADO CI pipeline (self-hosted agent)
-    → docker build → docker push → private ACR
-    → triggers CD pipeline (self-hosted agent)
-    → kubectl apply → private AKS pods (dev) → approval → (prod)
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Azure Resource Group                                                    │
+│                                                                          │
+│  ┌── Virtual Network  10.0.0.0/8 ──────────────────────────────────┐    │
+│  │                                                                  │    │
+│  │  ┌─────────────────────────┐   ┌─────────────────────────────┐  │    │
+│  │  │  subnet-aks             │   │  subnet-acr-pe              │  │    │
+│  │  │  10.240.0.0/16          │   │  10.241.0.0/24              │  │    │
+│  │  │                         │   │                             │  │    │
+│  │  │  ┌───────────────────┐  │   │  ┌─────────────────────┐   │  │    │
+│  │  │  │  AKS Cluster      │  │   │  │  ACR               │   │  │    │
+│  │  │  │  (private API     │  │   │  │  Private Endpoint   │   │  │    │
+│  │  │  │   server)         │  │   │  └─────────────────────┘   │  │    │
+│  │  │  └───────────────────┘  │   └─────────────────────────────┘  │    │
+│  │  └─────────────────────────┘                                     │    │
+│  │                                                                  │    │
+│  │  ┌──────────────────────────────────────────────────────────┐   │    │
+│  │  │  subnet-ado-agents  10.242.0.0/24                        │   │    │
+│  │  │                                                          │   │    │
+│  │  │  ┌────────────────────────────────────────────────────┐  │   │    │
+│  │  │  │  Self-hosted ADO Agents                            │  │   │    │
+│  │  │  │  • Reaches ACR via private endpoint                │  │   │    │
+│  │  │  │  • Reaches AKS via private API server              │  │   │    │
+│  │  │  └────────────────────────────────────────────────────┘  │   │    │
+│  │  └──────────────────────────────────────────────────────────┘   │    │
+│  │                                                                  │    │
+│  │  Private DNS: privatelink.azurecr.io  →  ACR private IP         │    │
+│  └──────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ACR  (Premium SKU · public access disabled · AcrPull via kubelet MI)   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**CI/CD Flow**
+
+```
+  Developer push to main
+         │
+         ▼
+  ┌─────────────────────────────────────────┐
+  │  CI Pipeline  (self-hosted ADO agent)   │
+  │                                         │
+  │  1. docker build                        │
+  │  2. docker push  ──────────────────────────────► Private ACR
+  │  3. publish build metadata              │
+  └──────────────────┬──────────────────────┘
+                     │  triggers on CI success
+                     ▼
+  ┌─────────────────────────────────────────┐
+  │  CD Pipeline  (self-hosted ADO agent)   │
+  │                                         │
+  │  Stage: Deploy → Dev                    │
+  │  1. Substitute image tag in manifest    │
+  │  2. kubectl apply ─────────────────────────────► Private AKS (dev)
+  │  3. kubectl rollout status              │
+  └──────────────────┬──────────────────────┘
+                     │  manual approval gate
+                     ▼
+  ┌─────────────────────────────────────────┐
+  │  CD Pipeline  (self-hosted ADO agent)   │
+  │                                         │
+  │  Stage: Deploy → Prod                   │
+  │  1. Substitute image tag in manifest    │
+  │  2. kubectl apply ─────────────────────────────► Private AKS (prod)
+  │  3. kubectl rollout status              │
+  └─────────────────────────────────────────┘
 ```
 
 ### Key Design Decisions
@@ -304,35 +334,6 @@ The string `REPLACE_ACR_IMAGE` in `deployment.yaml` is replaced at deploy time b
 
 ---
 
-## Pipeline Run Flow
-
-```
-Developer pushes to main
-       │
-       ▼
-┌─────────────────────┐
-│  CI Pipeline        │  (self-hosted agent — has Docker, Azure CLI)
-│  1. docker build    │
-│  2. docker push     │──── image:$(BuildId) ──→  Private ACR
-│  3. publish meta    │
-└─────────────────────┘
-       │  triggers (resources.pipelines)
-       ▼
-┌─────────────────────────────────────────────┐
-│  CD Pipeline                                │  (self-hosted agent — has kubectl, Azure CLI)
-│  Stage: DeployDev                           │
-│  1. checkout repo                           │
-│  2. sed substitute REPLACE_ACR_IMAGE        │
-│  3. KubernetesManifest deploy               │──── pull image ──→  Private ACR
-│  4. kubectl rollout status                  │──── apply ──────→  Private AKS (dev)
-└───────────────────┬─────────────────────────┘
-                    │  manual approval on aks-prod
-                    ▼
-┌─────────────────────────────────────────────┐
-│  Stage: DeployProd                          │
-│  (same steps, targeting prod AKS cluster)   │──── apply ──────→  Private AKS (prod)
-└─────────────────────────────────────────────┘
-```
 
 ---
 
