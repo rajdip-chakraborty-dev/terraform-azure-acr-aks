@@ -1,3 +1,5 @@
+# terraform-azure-acr-aks
+
 # Private ACR + Private AKS — Terraform Modules & Azure DevOps CI/CD
 
 ![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)
@@ -6,6 +8,8 @@
 ![Azure DevOps](https://img.shields.io/badge/Azure_DevOps-0078D7?style=for-the-badge&logo=azure-devops&logoColor=white)
 
 Terraform modules for provisioning a **private Azure Container Registry (ACR)** and a **private Azure Kubernetes Service (AKS)** cluster, together with Azure DevOps YAML pipelines that build Docker images (CI) and deploy them to AKS pods (CD). All pipelines run on **self-hosted ADO agents** that live inside the same virtual network, ensuring end-to-end private connectivity.
+
+> **Repository**: [github.com/rajdip-chakraborty-dev/terraform-azure-acr-aks](https://github.com/rajdip-chakraborty-dev/terraform-azure-acr-aks)
 
 ---
 
@@ -69,7 +73,7 @@ CI/CD Flow:
 ## Project Structure
 
 ```
-azure-acr-aks/
+terraform-azure-acr-aks/
 ├── main.tf                        # Root module — wires all sub-modules together
 ├── variables.tf                   # All input variables with descriptions and defaults
 ├── outputs.tf                     # Key outputs (ACR login server, AKS name, etc.)
@@ -159,8 +163,9 @@ Terraform will use the credentials from your active Azure CLI session.
 ## Step 2 — Deploy Infrastructure with Terraform
 
 ```bash
-# 1. Navigate to the template directory
-cd templates/terraform/azure-acr-aks
+# 1. Clone this repository and navigate into it
+git clone https://github.com/rajdip-chakraborty-dev/terraform-azure-acr-aks.git
+cd terraform-azure-acr-aks
 
 # 2. Copy and configure variables
 cp terraform.tfvars.example terraform.tfvars
@@ -274,13 +279,13 @@ Name the group exactly: **`acr-aks-variables`**
 1. Go to **Pipelines → New pipeline**
 2. Connect to your repository
 3. Select **Existing Azure Pipelines YAML file**
-4. Path: `templates/terraform/azure-acr-aks/pipeline/ci-pipeline.yml`
+4. Path: `pipeline/ci-pipeline.yml`
 5. Rename the pipeline to: **`CI - Build and Push Image`** (the CD pipeline references this exact name)
 6. Link the `acr-aks-variables` variable group under **Variables → Variable groups**
 
 ### CD Pipeline
 
-1. Repeat the steps above with path: `templates/terraform/azure-acr-aks/pipeline/cd-pipeline.yml`
+1. Repeat the steps above with path: `pipeline/cd-pipeline.yml`
 2. Create two ADO **Environments**:
    - `aks-dev` — no gates required (auto-deploys on CI success)
    - `aks-prod` — add a **manual approval** gate (Environments → Approvals and checks)
@@ -382,7 +387,7 @@ Key outputs: `cluster_id`, `cluster_name`, `private_fqdn`, `kube_config_raw` (se
 ## Destroy Infrastructure
 
 ```bash
-cd templates/terraform/azure-acr-aks
+cd terraform-azure-acr-aks
 terraform destroy
 ```
 
